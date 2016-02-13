@@ -40,7 +40,6 @@ uint64_t global_tiime_ms=0;
 uint64_t zoomin_counter=0;
 uint64_t zoomout_counter=0;
 
-
 uint16_t DMA_Buffer[4096];
 
 typedef struct {
@@ -74,26 +73,7 @@ FFTData_s fftData;
 
 TimerHandle_t TouchScreenTimer;
 
-typedef enum {
-	NONE,
-	TOUCH,
-	MOVE_UP,
-	MOVE_DOWN,
-	MOVE_LEFT,
-	MOVE_RIGHT,
-	ZOOM_IN,
-	ZOOM_OUT
-} Gesture;
-
-typedef struct {
-	uint8_t points;
-	uint16_t x[2];
-	uint16_t y[2];
-	Gesture gesture;
-} TouchData_s;
-
-TouchData_s touchData;
-TouchData_s touchDataPrev;
+QueueHandle_t gestureQueue;
 
 static void GUI_Thread(void const *argument);
 static void Signal_Thread(void const *argument);
@@ -121,6 +101,7 @@ int main(void)
   xTaskCreate(Signal_Thread, "Signal_Thread", 512, NULL, 1, &Signal_ThreadId);
   xTaskCreate(FFT_Thread, "FFT_Thread", 512, NULL, 1, &FFT_ThreadId);
   TouchScreenTimer = xTimerCreate ("Timer", 50, pdTRUE, ( void * ) 1, vTimerCallback );
+  gestureQueue = xQueueCreate(1, sizeof(MTOUCH_GestureData_s));
 
   vTaskStartScheduler();
   
@@ -142,7 +123,7 @@ void GUI_Thread(void const *argument) {
 	BSP_TS_Init(LCD_GetXSize(), LCD_GetYSize());
 	xTimerStart(TouchScreenTimer, 0);
 	__HAL_RCC_CRC_CLK_ENABLE();
-	WM_SetCreateFlags(WM_CF_MEMDEV | WM_CF_GESTURE);
+	WM_SetCreateFlags(WM_CF_MEMDEV);
 	GUI_Init();
 	GUI_Clear();
 /*
@@ -167,43 +148,50 @@ void GUI_Thread(void const *argument) {
 	int8_t deltaXPrevious = 0;
 	*/
 	char str[32];
+	MTOUCH_GestureData_s gestureData;
 	for (;;) {
 		GUI_Delay(10);
-		GUI_Clear();
-		sprintf(str, "Points [%d]", touchData.points);
-		GUI_DispStringAt(str, 10,10);
+		//GUI_Clear();
 
-		sprintf(str, "X1 [%d] Y1 [%d]", touchData.x[0], touchData.y[0]);
-		GUI_DispStringAt(str, 10, 20);
+		if (xQueueReceive(gestureQueue, &gestureData, 0)) {
+			GUI_DispStringAt("                         ", 10, 10);
+			GUI_DispStringAt("                         ", 10, 20);
 
-		sprintf(str, "X2 [%d] Y2 [%d]", touchData.x[1], touchData.y[1]);
-		GUI_DispStringAt(str, 10, 30);
+			sprintf(str, "Origin [%d]", gestureData.origin_x);
+			GUI_DispStringAt(str, 10, 10);
 
-		switch (touchData.gesture) {
+			switch (gestureData.gesture) {
 			case NONE:
-				GUI_DispStringAt("NONE", 10, 40);
+				GUI_DispStringAt("NONE", 10, 20);
 				break;
 			case MOVE_LEFT:
-				GUI_DispStringAt("MOVE_LEFT", 10, 40);
+				GUI_DispStringAt("MOVE_LEFT", 10, 20);
 				break;
 			case MOVE_RIGHT:
-				GUI_DispStringAt("MOVE_RIGHT", 10, 40);
+				GUI_DispStringAt("MOVE_RIGHT", 10, 20);
 				break;
 			case MOVE_UP:
-				GUI_DispStringAt("MOVE_UP", 10, 40);
+				GUI_DispStringAt("MOVE_UP", 10, 20);
 				break;
 			case MOVE_DOWN:
-				GUI_DispStringAt("MOVE_DOWN", 10, 40);
+				GUI_DispStringAt("MOVE_DOWN", 10, 20);
 				break;
-			case ZOOM_IN:
-				GUI_DispStringAt("ZOOM_IN", 10, 40);
+			case ZOOM_IN_X:
+				GUI_DispStringAt("ZOOM_IN_X", 10, 20);
 				break;
-			case ZOOM_OUT:
-				GUI_DispStringAt("ZOOM_OUT", 10, 40);
+			case ZOOM_OUT_X:
+				GUI_DispStringAt("ZOOM_OUT_X", 10, 20);
+				break;
+			case ZOOM_IN_Y:
+				GUI_DispStringAt("ZOOM_IN_Y", 10, 20);
+				break;
+			case ZOOM_OUT_Y:
+				GUI_DispStringAt("ZOOM_OUT_Y", 10, 20);
 				break;
 			case TOUCH:
-				GUI_DispStringAt("TOUCH", 10, 40);
+				GUI_DispStringAt("TOUCH", 10, 20);
 				break;
+			}
 		}
 	}
 }
@@ -368,58 +356,21 @@ void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
 static void vTimerCallback(TimerHandle_t pxTimer) {
 
 	TS_StateTypeDef tsState;
+	MTOUCH_TouchData_s touchData;
+	MTOUCH_GestureData_s gestureData;
+
 	BSP_TS_GetState(&tsState);
 
 	touchData.points = tsState.touchDetected;
 	touchData.x[0] = tsState.touchX[0];
-	touchData.y[0] = tsState.touchY[0];
 	touchData.x[1] = tsState.touchX[1];
+	touchData.y[0] = tsState.touchY[0];
 	touchData.y[1] = tsState.touchY[1];
-	if(touchData.points != touchDataPrev.points) {
-		touchData.gesture = TOUCH;
-	} else if (tsState.touchDetected == 1) {
-		int16_t dx = touchData.x[0] - touchDataPrev.x[0];
-		int16_t dy = touchData.y[0] - touchDataPrev.y[0];
-		int16_t dxAbs = dx > 0 ? dx : -1 * dx;
-		int16_t dyAbs = dy > 0 ? dy : -1 * dy;
 
-		if (dxAbs > dyAbs) {
-			if (dxAbs < 5)
-				touchData.gesture = TOUCH;
-			else if (dx > 0)
-				touchData.gesture = MOVE_RIGHT;
-			else
-				touchData.gesture = MOVE_LEFT;
+	MTOUCH_AddTouchData(&touchData);
+	MTOUCH_GetGesture(&gestureData);
 
-		} else {
-			if (dyAbs < 5)
-				touchData.gesture = TOUCH;
-			else if (dy > 0)
-				touchData.gesture = MOVE_DOWN;
-			else
-				touchData.gesture = MOVE_UP;
-		}
-
-	} else if (tsState.touchDetected == 2) {
-		int16_t dxPrev = touchDataPrev.x[1] - touchDataPrev.x[0];
-		int16_t dxPrevAbs = dxPrev > 0 ? dxPrev : -1 * dxPrev;
-		int16_t dxCurr = touchData.x[1] - touchData.x[0];
-		int16_t dxCurrAbs = dxCurr > 0 ? dxCurr : -1 * dxCurr;
-
-		int16_t dx = dxCurrAbs - dxPrevAbs;
-		int16_t dxAbs = dx > 0 ? dx : -1 * dx;
-
-		if (dxAbs < 5)
-			touchData.gesture = TOUCH;
-		else if (dx > 0)
-			touchData.gesture = ZOOM_IN;
-		else
-			touchData.gesture = ZOOM_OUT;
-	} else {
-		touchData.gesture = NONE;
-	}
-
-	touchDataPrev = touchData;
+	xQueueOverwrite(gestureQueue, &gestureData);
 
 }
 
