@@ -25,67 +25,27 @@
   ******************************************************************************
   */
 
-/* Includes ------------------------------------------------------------------*/
-#include "FreeRTOS.h"
-#include "timers.h"
 #include "main.h"
-#include "cmsis_os.h"
-#include "arm_math.h"
-#include "arm_common_tables.h"
-
-#define SIGNAL_LENGTH	470
-#define FFT_LENGTH	470
-
-uint64_t global_tiime_ms=0;
-uint64_t zoomin_counter=0;
-uint64_t zoomout_counter=0;
-
-uint16_t DMA_Buffer[4096];
-
-typedef struct {
-	GRAPH_DATA_Handle graphData;
-	GRAPH_DATA_Handle graphStep;
-	int16_t signal[4096];
-	uint8_t ready;
-} SignalData_s;
-
-typedef SignalData_s* SignalData_p;
-
-typedef struct {
-
-	GRAPH_DATA_Handle graphData;
-	float32_t input[1024];
-	float32_t output[1024];
-	uint8_t ready;
-} FFTData_s;
-
-typedef FFTData_s* FFTData_p;
-
-GRAPH_Handle graphSignal;
-GRAPH_Handle graphFFT;
-
-TaskHandle_t GUI_ThreadId;
-TaskHandle_t Signal_ThreadId;
-TaskHandle_t FFT_ThreadId;
-
-SignalData_s signalData;
-FFTData_s fftData;
-
-TimerHandle_t TouchScreenTimer;
-
-QueueHandle_t gestureQueue;
 
 static void GUI_Thread(void const *argument);
 static void Signal_Thread(void const *argument);
 static void FFT_Thread(void const *argument);
-static void vTimerCallback(TimerHandle_t pxTimer);
-
+static void vTouchTimerCallback(TimerHandle_t pxTimer);
 static void SystemClock_Config(void);
 //static void CPU_CACHE_Enable(void);
 
-/* Private functions ---------------------------------------------------------*/
-
-
+static AppGlobals_s appGlobals;
+uint64_t timeDMAHalf = 0;
+uint64_t timeDMAFull = 0;
+uint64_t timeSignalDMAHalf = 0;
+uint64_t timeSignalDMAFull = 0;
+uint64_t timeFFTDMAHalf = 0;
+uint64_t timeFFTDMAFull = 0;
+uint64_t timeSignalDMAHalfStop = 0;
+uint64_t timeSignalDMAFullStop = 0;
+uint64_t timeFFTDMAHalfStop = 0;
+uint64_t timeFFTDMAFullStop = 0;
+uint64_t globalTime=0;
 /**
   * @brief  Main program
   * @param  None
@@ -94,150 +54,304 @@ static void SystemClock_Config(void);
 int main(void)
 {
   //CPU_CACHE_Enable();
-  HAL_Init();  
+  HAL_Init();
   SystemClock_Config();
 
-  xTaskCreate(GUI_Thread, "GUI_Thread", 2048, NULL, 1, &GUI_ThreadId);
-  xTaskCreate(Signal_Thread, "Signal_Thread", 512, NULL, 1, &Signal_ThreadId);
-  xTaskCreate(FFT_Thread, "FFT_Thread", 512, NULL, 1, &FFT_ThreadId);
-  TouchScreenTimer = xTimerCreate ("Timer", 50, pdTRUE, ( void * ) 1, vTimerCallback );
-  gestureQueue = xQueueCreate(1, sizeof(MTOUCH_GestureData_s));
+  xTaskCreate(GUI_Thread, "GUI_Thread", 512, NULL, 1, &appGlobals.guiThreadId);
+  xTaskCreate(Signal_Thread, "Signal_Thread", 1024, NULL, 1, &appGlobals.signalThreadId);
+  xTaskCreate(FFT_Thread, "FFT_Thread", 1024, NULL, 1, &appGlobals.fftThreadId);
+  appGlobals.touchScreenTimer = xTimerCreate ("Timer", 100, pdTRUE, ( void * ) 1, vTouchTimerCallback );
+  appGlobals.gestureQueue = xQueueCreate(1, sizeof(MTOUCH_GestureData_s));
 
   vTaskStartScheduler();
   
   for(;;);
 }
 
-void zoomin() {
-	zoomin_counter++;
-}
-
-void zoomout() {
-	zoomout_counter++;
-}
-
-
-void GUI_Thread(void const *argument) {
+void GUI_Thread(void const *arg) {
 
 	BSP_SDRAM_Init();
 	BSP_TS_Init(LCD_GetXSize(), LCD_GetYSize());
-	xTimerStart(TouchScreenTimer, 0);
+	xTimerStart(appGlobals.touchScreenTimer, 0);
+
 	__HAL_RCC_CRC_CLK_ENABLE();
-	WM_SetCreateFlags(WM_CF_MEMDEV);
+	WM_SetCreateFlags(WM_CF_MEMDEV | WM_CF_MEMDEV_ON_REDRAW);
 	GUI_Init();
 	GUI_Clear();
-/*
-	graphSignal = GRAPH_CreateEx(0, 0, LCD_GetXSize(), LCD_GetYSize()/2, WM_HBKWIN, WM_CF_SHOW, 0, GUI_ID_GRAPH0);
-	GRAPH_SetBorder(graphSignal, 5, 5, 5, 5);
-	signalData.graphStep = 1;
-	signalData.graphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH, NULL, 0);
-	GRAPH_DATA_YT_SetAlign(signalData.graphData, GRAPH_ALIGN_LEFT);
-	GRAPH_AttachData(graphSignal, signalData.graphData);
 
-	graphFFT = GRAPH_CreateEx(0, LCD_GetYSize()/2, LCD_GetXSize(), LCD_GetYSize()/2, WM_HBKWIN, WM_CF_SHOW, 0, GUI_ID_GRAPH1);
-	GRAPH_SetBorder(graphFFT, 5, 5, 5, 5);
-	fftData.graphData = GRAPH_DATA_YT_Create(GUI_BLUE,FFT_LENGTH, NULL, 0);
-	GRAPH_DATA_YT_SetAlign(fftData.graphData, GRAPH_ALIGN_LEFT);
-	GRAPH_AttachData(graphFFT, fftData.graphData);
+	appGlobals.signalGraph = GRAPH_CreateEx(0, 0, LCD_GetXSize(), LCD_GetYSize()/2, WM_HBKWIN, WM_CF_SHOW, 0, GUI_ID_GRAPH0);
+	GRAPH_SetBorder(appGlobals.signalGraph, 5, 5, 5, 5);
+	appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH, NULL, 0);
+	GRAPH_DATA_YT_SetAlign(appGlobals.signalGraphData, GRAPH_ALIGN_LEFT);
+	GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
 
-	xTaskNotifyGive(Signal_ThreadId);
+	appGlobals.fftGraph = GRAPH_CreateEx(0, LCD_GetYSize()/2, LCD_GetXSize(), LCD_GetYSize()/2, WM_HBKWIN, WM_CF_SHOW, 0, GUI_ID_GRAPH1);
+	GRAPH_SetBorder(appGlobals.fftGraph, 5, 5, 5, 5);
+	appGlobals.fftGraphScale = GRAPH_SCALE_Create(LCD_GetYSize()/2-12, GUI_TA_LEFT, GRAPH_SCALE_CF_HORIZONTAL, 50);
+	GRAPH_SCALE_SetFactor(appGlobals.fftGraphScale, (2.0*DEFAULT_AUDIO_IN_FREQ/DMA_BUFFER_LENGTH));
+	GRAPH_AttachScale(appGlobals.fftGraph, appGlobals.fftGraphScale);
+	appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE,FFT_LENGTH, NULL, 0);
+	GRAPH_DATA_YT_SetAlign(appGlobals.fftGraphData, GRAPH_ALIGN_LEFT);
+	GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
 
-	GUI_MTOUCH_EVENT Event;
-	GUI_MTOUCH_INPUT Input;
-	int8_t deltaXCurrent = 0;
-	int8_t deltaXPrevious = 0;
-	*/
-	char str[32];
+	xTaskNotifyGive(appGlobals.signalThreadId);
+
+	//char str[32];
 	MTOUCH_GestureData_s gestureData;
 	for (;;) {
 		GUI_Delay(10);
-		//GUI_Clear();
-
-		if (xQueueReceive(gestureQueue, &gestureData, 0)) {
-			GUI_DispStringAt("                         ", 10, 10);
-			GUI_DispStringAt("                         ", 10, 20);
-
-			sprintf(str, "Origin [%d]", gestureData.origin_x);
-			GUI_DispStringAt(str, 10, 10);
-
-			switch (gestureData.gesture) {
-			case NONE:
-				GUI_DispStringAt("NONE", 10, 20);
-				break;
-			case MOVE_LEFT:
-				GUI_DispStringAt("MOVE_LEFT", 10, 20);
-				break;
-			case MOVE_RIGHT:
-				GUI_DispStringAt("MOVE_RIGHT", 10, 20);
-				break;
-			case MOVE_UP:
-				GUI_DispStringAt("MOVE_UP", 10, 20);
-				break;
-			case MOVE_DOWN:
-				GUI_DispStringAt("MOVE_DOWN", 10, 20);
-				break;
-			case ZOOM_IN_X:
-				GUI_DispStringAt("ZOOM_IN_X", 10, 20);
-				break;
-			case ZOOM_OUT_X:
-				GUI_DispStringAt("ZOOM_OUT_X", 10, 20);
-				break;
-			case ZOOM_IN_Y:
-				GUI_DispStringAt("ZOOM_IN_Y", 10, 20);
-				break;
-			case ZOOM_OUT_Y:
-				GUI_DispStringAt("ZOOM_OUT_Y", 10, 20);
-				break;
-			case TOUCH:
-				GUI_DispStringAt("TOUCH", 10, 20);
-				break;
+		if (xQueueReceive(appGlobals.gestureQueue, &gestureData, 0)) {
+			if (gestureData.origin_y > LCD_GetYSize() / 2) {
+				switch (gestureData.gesture) {
+				case MOVE_LEFT:
+					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					break;
+				case MOVE_RIGHT:
+					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					break;
+				case ZOOM_IN_X:
+					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					break;
+				case ZOOM_OUT_X:
+					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					break;
+				default:
+					break;
+				}
+			} else {
+				switch (gestureData.gesture) {
+				case MOVE_LEFT:
+					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					break;
+				case MOVE_RIGHT:
+					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					break;
+				case ZOOM_IN_X:
+					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					break;
+				case ZOOM_OUT_X:
+					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					break;
+				default:
+					break;
+				}
 			}
 		}
 	}
 }
 
-void Signal_Thread(void const *argument) {
+static void scaleAxisXFloat(float32_t* tab, uint32_t len, uint32_t scale) {
+	uint32_t index;
+	for (index = 0; index < len/scale; index++)
+		arm_mean_f32(tab + (index * scale), scale, tab+index);
+}
 
-	 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+static void scaleAxisYFloat(float32_t* tab, uint32_t len) {
+	float32_t min;
+	float32_t max;
+	uint32_t index;
 
-	 BSP_AUDIO_IN_Init(INPUT_DEVICE_INPUT_LINE_1, DEFAULT_AUDIO_IN_VOLUME, DEFAULT_AUDIO_IN_FREQ);
-	 BSP_AUDIO_IN_Record(DMA_Buffer, 4096);
+	arm_max_f32(tab, len, &max, &index);
+	arm_min_f32(tab, len, &min, &index);
 
-	 signalData.ready = 1;
+	for (index = 0; index < len; index++)
+		tab[index] = (tab[index]-min)*GRAPH_RANGE_Y/(max-min)+GRAPH_OFFSET_Y;
+}
 
-	 uint16_t idx1 = 0;
-	 uint16_t idx2 = 0;
-	 for(;;) {
-		 vTaskDelay(200/portTICK_PERIOD_MS);
-		 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-		 GRAPH_DATA_YT_Clear(signalData.graphData);
-		 for(idx1 = 0, idx2 = 0; idx1 < SIGNAL_LENGTH && idx2<4096; idx1++, idx2+=signalData.graphStep)
-			 GRAPH_DATA_YT_AddValue(signalData.graphData, signalData.signal[idx2]+60);
+static void scaleAxisXInt(int16_t* tab, uint32_t len, uint32_t scale) {
+	uint32_t index;
+	for (index = 0; index < len/scale; index++)
+		arm_mean_q15(tab + (index * scale), scale, tab+index);
+}
 
-		 signalData.ready = 1;
+static void scaleAxisYInt(int16_t* tab, uint32_t len) {
+	int16_t min;
+	int16_t max;
+	uint32_t index;
+
+	arm_max_q15(tab, len, &max, &index);
+	arm_min_q15(tab, len, &min, &index);
+
+	for (index = 0; index < len; index++)
+		tab[index] = (tab[index]-min)*GRAPH_RANGE_Y/(max-min)+GRAPH_OFFSET_Y;
+}
+
+void Signal_Thread(void const *arg) {
+
+	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+	BSP_AUDIO_IN_Init(INPUT_DEVICE_INPUT_LINE_1, DEFAULT_AUDIO_IN_VOLUME, DEFAULT_AUDIO_IN_FREQ);
+	BSP_AUDIO_IN_Record((uint16_t*)appGlobals.dmaBuffer, DMA_BUFFER_LENGTH);
+
+	timeDMAHalf = 0;
+	timeDMAFull = 0;
+	timeSignalDMAHalf = 0;
+	timeSignalDMAFull = 0;
+	timeFFTDMAHalf = 0;
+	timeFFTDMAFull = 0;
+	timeSignalDMAHalfStop = 0;
+	timeSignalDMAFullStop = 0;
+	timeFFTDMAHalfStop = 0;
+	timeFFTDMAFullStop = 0;
+	globalTime = 0;
+
+	int16_t displayOffsetX = 0;
+	int16_t displayScaleX = 1;
+
+	uint32_t notificationValue;
+	uint16_t idx;
+	for (;;) {
+		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
+			switch (notificationValue) {
+			case TASK_EVENT_DMA_HALF_DONE:
+				timeSignalDMAHalf = globalTime;
+				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
+					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[idx*2];
+
+				scaleAxisXInt(appGlobals.signalDisplay, SIGNAL_SAMPLES, displayScaleX);
+				scaleAxisYInt(appGlobals.signalDisplay, SIGNAL_SAMPLES/displayScaleX);
+
+				for (idx = 0; idx < SIGNAL_LENGTH; idx++)
+					appGlobals.signalDisplay[idx] = appGlobals.signalDisplay[idx+displayOffsetX];
+
+ 				GRAPH_DetachData(appGlobals.signalGraph, appGlobals.signalGraphData);
+				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
+				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH, appGlobals.signalDisplay, SIGNAL_LENGTH);
+				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
+				timeSignalDMAHalfStop= globalTime;
+				break;
+
+			case TASK_EVENT_DMA_DONE:
+				timeSignalDMAFull = globalTime;
+				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
+					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2 + idx*2];
+
+				scaleAxisXInt(appGlobals.signalDisplay, SIGNAL_SAMPLES, displayScaleX);
+				scaleAxisYInt(appGlobals.signalDisplay, SIGNAL_SAMPLES/displayScaleX);
+
+				for (idx = 0; idx < SIGNAL_LENGTH; idx++)
+					appGlobals.signalDisplay[idx] = appGlobals.signalDisplay[idx+displayOffsetX];
+
+				GRAPH_DetachData(appGlobals.signalGraph, appGlobals.signalGraphData);
+				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
+				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH,  appGlobals.signalDisplay, SIGNAL_LENGTH);
+				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
+				timeSignalDMAFullStop = globalTime;
+				break;
+			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
+				if((SIGNAL_LENGTH-1+displayOffsetX+5)*(displayScaleX)<SIGNAL_SAMPLES)
+					displayOffsetX+= 5;
+				break;
+			case TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT:
+				if(displayOffsetX >= 5)
+					displayOffsetX-=5;
+				break;
+			case TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X:
+				if(displayScaleX>1)
+					displayScaleX--;
+				break;
+			case TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X:
+				if((FFT_LENGTH-1+displayOffsetX)*(displayScaleX+1)<SIGNAL_SAMPLES)
+					displayScaleX++;
+				break;
+			}
+		}
 	 }
 }
 
-void FFT_Thread(void const *argument) {
+void FFT_Thread(void const *arg) {
+
 	arm_rfft_fast_instance_f32 fftInit;
-	arm_rfft_fast_init_f32(&fftInit, 1024);
+	arm_rfft_fast_init_f32(&fftInit, SIGNAL_SAMPLES);
 
-	fftData.ready = 1;
+	int16_t displayOffsetX = 0;
+	int16_t displayScaleX = 1;
 
-	I16 idx = 0;
-	 for(;;) {
-		 vTaskDelay(200/portTICK_PERIOD_MS);
-		 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-		 for(idx = 0; idx < 1024; idx++)
-			 fftData.input[idx] = signalData.signal[idx];
+	uint32_t notificationValue;
+	uint16_t idx;
+	float32_t scaleFactor = 2.0*DEFAULT_AUDIO_IN_FREQ/DMA_BUFFER_LENGTH;
+	for (;;) {
 
-		 arm_rfft_fast_f32(&fftInit, fftData.input, fftData.output, 0);
-		 arm_abs_f32(fftData.output, fftData.output, 512);
-		 GRAPH_DATA_YT_Clear(fftData.graphData);
-		 for(idx = 0; idx < FFT_LENGTH; idx++)
-			 GRAPH_DATA_YT_AddValue(fftData.graphData, fftData.output[idx]/40);
+		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
+			switch (notificationValue) {
+			case TASK_EVENT_DMA_HALF_DONE:
+				timeFFTDMAHalf = globalTime;
+				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
+					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[idx*2];
+				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
+				arm_abs_f32(appGlobals.fftOutput, appGlobals.fftOutput, SIGNAL_SAMPLES);
 
-		 fftData.ready = 1;
+				scaleAxisXFloat(appGlobals.fftOutput, SIGNAL_SAMPLES, displayScaleX);
+				scaleAxisYFloat(appGlobals.fftOutput, SIGNAL_SAMPLES/displayScaleX);
+				for (idx = 0; idx < FFT_LENGTH; idx++) {
+					appGlobals.fftDisplay[idx] = appGlobals.fftOutput[idx+displayOffsetX/displayScaleX];
+				}
+
+				GRAPH_DetachData(appGlobals.fftGraph, appGlobals.fftGraphData);
+				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
+				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
+				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
+				timeFFTDMAHalfStop = globalTime;
+				break;
+			case TASK_EVENT_DMA_DONE:
+				timeFFTDMAFull = globalTime;
+				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
+					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2];
+				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
+				arm_abs_f32(appGlobals.fftOutput, appGlobals.fftOutput, SIGNAL_SAMPLES);
+
+				scaleAxisXFloat(appGlobals.fftOutput, SIGNAL_SAMPLES, displayScaleX);
+				scaleAxisYFloat(appGlobals.fftOutput, SIGNAL_SAMPLES/displayScaleX);
+				for (idx = 0; idx < FFT_LENGTH; idx++) {
+					appGlobals.fftDisplay[idx] = appGlobals.fftOutput[idx+displayOffsetX/displayScaleX];
+				}
+
+				GRAPH_DetachData(appGlobals.fftGraph, appGlobals.fftGraphData);
+				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
+				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
+				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
+				timeFFTDMAFullStop = globalTime;
+				break;
+			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
+				 if(displayOffsetX + displayScaleX*(FFT_LENGTH+10)<SIGNAL_SAMPLES) {
+					displayOffsetX+= 10*displayScaleX;
+					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
+				}
+				break;
+			case TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT:
+				if(displayOffsetX >= 10*displayScaleX) {
+					displayOffsetX-=10*displayScaleX;
+					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
+				}
+				break;
+			case TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X:
+				if(displayScaleX>1) {
+					displayOffsetX*=scaleFactor;
+					displayOffsetX += FFT_LENGTH*displayScaleX/4;
+					displayScaleX--;
+					displayOffsetX /= scaleFactor;
+
+					GRAPH_SCALE_SetFactor(appGlobals.fftGraphScale,  scaleFactor*displayScaleX);
+					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
+				}
+				break;
+			case TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X:
+				if((FFT_LENGTH-1)*(displayScaleX+1)<SIGNAL_SAMPLES) {
+					displayOffsetX *= scaleFactor;
+					displayOffsetX -= FFT_LENGTH * displayScaleX / 2;
+					displayScaleX++;
+					displayOffsetX /= scaleFactor;
+
+					if(displayOffsetX<0)
+						displayOffsetX=0;
+					else if(displayScaleX*(displayOffsetX+FFT_LENGTH)>=SIGNAL_SAMPLES)
+						displayOffsetX = SIGNAL_SAMPLES/displayScaleX-FFT_LENGTH;
+					GRAPH_SCALE_SetFactor(appGlobals.fftGraphScale,  scaleFactor*displayScaleX);
+					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
+				}
+				break;
+			}
+		}
 	 }
 }
 
@@ -287,6 +401,8 @@ static void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;  
   HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_7);
 
+  SystemCoreClockUpdate();
+
 }
 
 #ifdef  USE_FULL_ASSERT
@@ -327,7 +443,7 @@ static void CPU_CACHE_Enable(void)
 void vApplicationTickHook( void )
 {
 	HAL_IncTick();
-	global_tiime_ms++;
+	globalTime++;
 }
 
 void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName ) {
@@ -336,24 +452,35 @@ void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName ) {
 	}
 }
 
-void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
-	if(signalData.ready==0 || fftData.ready==0)
-		return;
+void BSP_AUDIO_IN_HalfTransfer_CallBack(void) {
 
-	signalData.ready=0;
-	fftData.ready=0;
-
-	int idx;
-	for (idx = 0; idx < 4096; idx++)
-		signalData.signal[idx] = DMA_Buffer[idx];
+	timeDMAHalf = globalTime;
+	//uint16_t idx;
+	//for(idx=0; idx<DMA_BUFFER_LENGTH/4; idx++) {
+	//	appGlobals.dmaBuffer[idx*2] = sinTable_q15[(idx*10)%512]/1000 + sinTable_q15[(idx*20)%512]/1000;
+	//	appGlobals.dmaBuffer[idx*2+1] = 1;
+	//}
 
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	vTaskNotifyGiveFromISR(Signal_ThreadId, &xHigherPriorityTaskWoken);
-	vTaskNotifyGiveFromISR(FFT_ThreadId, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-static void vTimerCallback(TimerHandle_t pxTimer) {
+void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
+	timeDMAFull = globalTime;
+	//uint16_t idx;
+	//for(idx=0; idx<DMA_BUFFER_LENGTH/4; idx++) {
+	//	appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2] = (sinTable_q15[(idx*10)%512]/1000 + sinTable_q15[(idx*20)%512]/1000)*-1;
+	//	appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2+1] = 1;
+	//}
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+static void vTouchTimerCallback(TimerHandle_t pxTimer) {
 
 	TS_StateTypeDef tsState;
 	MTOUCH_TouchData_s touchData;
@@ -370,10 +497,7 @@ static void vTimerCallback(TimerHandle_t pxTimer) {
 	MTOUCH_AddTouchData(&touchData);
 	MTOUCH_GetGesture(&gestureData);
 
-	xQueueOverwrite(gestureQueue, &gestureData);
-
+	xQueueOverwrite(appGlobals.gestureQueue, &gestureData);
 }
-
-
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
 

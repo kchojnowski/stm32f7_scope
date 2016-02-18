@@ -33,8 +33,7 @@
  extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
-#include "stm32f7xx_hal.h"
+/* Includes ------------------------------------------------------------------*/#include "stm32f7xx_hal.h"
 #include "stm32f7xx_hal_i2s.h"
 #include "stm32746g_discovery.h"
 #include "stm32746g_discovery_sdram.h"
@@ -45,14 +44,52 @@
 #include "WM.h"
 #include "GRAPH.h"
 #include "mtouch.h"
+#include "FreeRTOS.h"
+#include "timers.h"
+#include "cmsis_os.h"
+#include "arm_math.h"
+#include "arm_common_tables.h"
+
+#define SIGNAL_LENGTH	470
+#define FFT_LENGTH		470
+#define GRAPH_RANGE_Y 	120
+#define GRAPH_OFFSET_Y 	2
+
+#define TASK_EVENT_DMA_HALF_DONE 			0x01
+#define TASK_EVENT_DMA_DONE 				0x02
+#define TASK_EVENT_CHANGE_VIEW_MOVE_LEFT	0x10
+#define TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT	0x11
+#define TASK_EVENT_CHANGE_VIEW_MOVE_UP		0x12
+#define TASK_EVENT_CHANGE_VIEW_MOVE_DOWN	0x13
+#define TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X	0x14
+#define TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X	0x15
+#define TASK_EVENT_CHANGE_VIEW_ZOOM_IN_Y	0x16
+#define TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_Y	0x17
 
 
 
-/* Exported types ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/ 
-/* Exported macro ------------------------------------------------------------*/
-/* Exported functions ------------------------------------------------------- */
+#define DMA_BUFFER_LENGTH			16384
+#define SIGNAL_SAMPLES				DMA_BUFFER_LENGTH/4
 
+typedef struct {
+	TaskHandle_t guiThreadId;
+	TaskHandle_t signalThreadId;
+	TaskHandle_t fftThreadId;
+	QueueHandle_t gestureQueue;
+	TimerHandle_t touchScreenTimer;
+
+	GRAPH_Handle signalGraph;
+	GRAPH_DATA_Handle signalGraphData;
+	GRAPH_Handle fftGraph;
+	GRAPH_DATA_Handle fftGraphData;
+	GRAPH_SCALE_Handle fftGraphScale;
+
+	int16_t dmaBuffer[DMA_BUFFER_LENGTH];
+	float32_t fftInput[SIGNAL_SAMPLES];
+	float32_t fftOutput[SIGNAL_SAMPLES];
+	int16_t signalDisplay[SIGNAL_SAMPLES];
+	int16_t fftDisplay[SIGNAL_LENGTH];
+} AppGlobals_s;
 
 #ifdef __cplusplus
 }

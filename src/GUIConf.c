@@ -62,7 +62,7 @@ Purpose     : Display controller initialization
 //
 // Define the available number of bytes available for the GUI
 //
-#define GUI_NUMBYTES  (1024) *  150
+#define GUI_NUMBYTES  (1024) *  200
 
 U32 aMemory[GUI_NUMBYTES / 4];
 
