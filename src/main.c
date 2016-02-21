@@ -32,20 +32,9 @@ static void Signal_Thread(void const *argument);
 static void FFT_Thread(void const *argument);
 static void vTouchTimerCallback(TimerHandle_t pxTimer);
 static void SystemClock_Config(void);
-//static void CPU_CACHE_Enable(void);
 
 static AppGlobals_s appGlobals;
-uint64_t timeDMAHalf = 0;
-uint64_t timeDMAFull = 0;
-uint64_t timeSignalDMAHalf = 0;
-uint64_t timeSignalDMAFull = 0;
-uint64_t timeFFTDMAHalf = 0;
-uint64_t timeFFTDMAFull = 0;
-uint64_t timeSignalDMAHalfStop = 0;
-uint64_t timeSignalDMAFullStop = 0;
-uint64_t timeFFTDMAHalfStop = 0;
-uint64_t timeFFTDMAFullStop = 0;
-uint64_t globalTime=0;
+
 /**
   * @brief  Main program
   * @param  None
@@ -183,18 +172,6 @@ void Signal_Thread(void const *arg) {
 	BSP_AUDIO_IN_Init(INPUT_DEVICE_INPUT_LINE_1, DEFAULT_AUDIO_IN_VOLUME, DEFAULT_AUDIO_IN_FREQ);
 	BSP_AUDIO_IN_Record((uint16_t*)appGlobals.dmaBuffer, DMA_BUFFER_LENGTH);
 
-	timeDMAHalf = 0;
-	timeDMAFull = 0;
-	timeSignalDMAHalf = 0;
-	timeSignalDMAFull = 0;
-	timeFFTDMAHalf = 0;
-	timeFFTDMAFull = 0;
-	timeSignalDMAHalfStop = 0;
-	timeSignalDMAFullStop = 0;
-	timeFFTDMAHalfStop = 0;
-	timeFFTDMAFullStop = 0;
-	globalTime = 0;
-
 	int16_t displayOffsetX = 0;
 	int16_t displayScaleX = 1;
 
@@ -204,7 +181,6 @@ void Signal_Thread(void const *arg) {
 		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
 			switch (notificationValue) {
 			case TASK_EVENT_DMA_HALF_DONE:
-				timeSignalDMAHalf = globalTime;
 				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
 					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[idx*2];
 
@@ -218,11 +194,9 @@ void Signal_Thread(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
 				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH, appGlobals.signalDisplay, SIGNAL_LENGTH);
 				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
-				timeSignalDMAHalfStop= globalTime;
 				break;
 
 			case TASK_EVENT_DMA_DONE:
-				timeSignalDMAFull = globalTime;
 				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
 					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2 + idx*2];
 
@@ -236,7 +210,6 @@ void Signal_Thread(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
 				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH,  appGlobals.signalDisplay, SIGNAL_LENGTH);
 				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
-				timeSignalDMAFullStop = globalTime;
 				break;
 			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
 				if((SIGNAL_LENGTH-1+displayOffsetX+5)*(displayScaleX)<SIGNAL_SAMPLES)
@@ -275,7 +248,6 @@ void FFT_Thread(void const *arg) {
 		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
 			switch (notificationValue) {
 			case TASK_EVENT_DMA_HALF_DONE:
-				timeFFTDMAHalf = globalTime;
 				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
 					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[idx*2];
 				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
@@ -291,10 +263,8 @@ void FFT_Thread(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
 				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
 				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
-				timeFFTDMAHalfStop = globalTime;
 				break;
 			case TASK_EVENT_DMA_DONE:
-				timeFFTDMAFull = globalTime;
 				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
 					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2];
 				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
@@ -310,7 +280,6 @@ void FFT_Thread(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
 				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
 				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
-				timeFFTDMAFullStop = globalTime;
 				break;
 			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
 				 if(displayOffsetX + displayScaleX*(FFT_LENGTH+10)<SIGNAL_SAMPLES) {
@@ -425,42 +394,12 @@ void assert_failed(uint8_t* file, uint32_t line)
 }
 #endif
 
-/**
-  * @brief  CPU L1-Cache enable.
-  * @param  None
-  * @retval None
-  */
-/*
-static void CPU_CACHE_Enable(void)
-{
-
-  SCB_EnableICache();
-
-
-  SCB_EnableDCache();
-}
-*/
 void vApplicationTickHook( void )
 {
 	HAL_IncTick();
-	globalTime++;
-}
-
-void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName ) {
-	while (1) {
-
-	}
 }
 
 void BSP_AUDIO_IN_HalfTransfer_CallBack(void) {
-
-	timeDMAHalf = globalTime;
-	//uint16_t idx;
-	//for(idx=0; idx<DMA_BUFFER_LENGTH/4; idx++) {
-	//	appGlobals.dmaBuffer[idx*2] = sinTable_q15[(idx*10)%512]/1000 + sinTable_q15[(idx*20)%512]/1000;
-	//	appGlobals.dmaBuffer[idx*2+1] = 1;
-	//}
-
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
 	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
@@ -468,12 +407,6 @@ void BSP_AUDIO_IN_HalfTransfer_CallBack(void) {
 }
 
 void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
-	timeDMAFull = globalTime;
-	//uint16_t idx;
-	//for(idx=0; idx<DMA_BUFFER_LENGTH/4; idx++) {
-	//	appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2] = (sinTable_q15[(idx*10)%512]/1000 + sinTable_q15[(idx*20)%512]/1000)*-1;
-	//	appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2+1] = 1;
-	//}
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
 	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
