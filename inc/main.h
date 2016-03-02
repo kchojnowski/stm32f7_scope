@@ -72,9 +72,9 @@
 #define SIGNAL_SAMPLES				DMA_BUFFER_LENGTH/4
 
 typedef struct {
-	TaskHandle_t guiThreadId;
-	TaskHandle_t signalThreadId;
-	TaskHandle_t fftThreadId;
+	TaskHandle_t guiTaskId;
+	TaskHandle_t signalTaskId;
+	TaskHandle_t fftTaskId;
 	QueueHandle_t gestureQueue;
 	TimerHandle_t touchScreenTimer;
 

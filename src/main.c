@@ -27,9 +27,9 @@
 
 #include "main.h"
 
-static void GUI_Thread(void const *argument);
-static void Signal_Thread(void const *argument);
-static void FFT_Thread(void const *argument);
+static void GUI_Task(void const *argument);
+static void Signal_Task(void const *argument);
+static void FFT_Task(void const *argument);
 static void vTouchTimerCallback(TimerHandle_t pxTimer);
 static void SystemClock_Config(void);
 
@@ -46,9 +46,9 @@ int main(void)
   HAL_Init();
   SystemClock_Config();
 
-  xTaskCreate(GUI_Thread, "GUI_Thread", 512, NULL, 1, &appGlobals.guiThreadId);
-  xTaskCreate(Signal_Thread, "Signal_Thread", 1024, NULL, 1, &appGlobals.signalThreadId);
-  xTaskCreate(FFT_Thread, "FFT_Thread", 1024, NULL, 1, &appGlobals.fftThreadId);
+  xTaskCreate(GUI_Task, "GUI_Task", 512, NULL, 1, &appGlobals.guiTaskId);
+  xTaskCreate(Signal_Task, "Signal_Task", 1024, NULL, 1, &appGlobals.signalTaskId);
+  xTaskCreate(FFT_Task, "FFT_Task", 1024, NULL, 1, &appGlobals.fftTaskId);
   appGlobals.touchScreenTimer = xTimerCreate ("Timer", 100, pdTRUE, ( void * ) 1, vTouchTimerCallback );
   appGlobals.gestureQueue = xQueueCreate(1, sizeof(MTOUCH_GestureData_s));
 
@@ -57,7 +57,7 @@ int main(void)
   for(;;);
 }
 
-void GUI_Thread(void const *arg) {
+void GUI_Task(void const *arg) {
 
 	BSP_SDRAM_Init();
 	BSP_TS_Init(LCD_GetXSize(), LCD_GetYSize());
@@ -83,7 +83,7 @@ void GUI_Thread(void const *arg) {
 	GRAPH_DATA_YT_SetAlign(appGlobals.fftGraphData, GRAPH_ALIGN_LEFT);
 	GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
 
-	xTaskNotifyGive(appGlobals.signalThreadId);
+	xTaskNotifyGive(appGlobals.signalTaskId);
 
 	//char str[32];
 	MTOUCH_GestureData_s gestureData;
@@ -93,16 +93,16 @@ void GUI_Thread(void const *arg) {
 			if (gestureData.origin_y > LCD_GetYSize() / 2) {
 				switch (gestureData.gesture) {
 				case MOVE_LEFT:
-					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
 					break;
 				case MOVE_RIGHT:
-					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
 					break;
 				case ZOOM_IN_X:
-					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
 					break;
 				case ZOOM_OUT_X:
-					xTaskNotify(appGlobals.fftThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
 					break;
 				default:
 					break;
@@ -110,16 +110,16 @@ void GUI_Thread(void const *arg) {
 			} else {
 				switch (gestureData.gesture) {
 				case MOVE_LEFT:
-					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
 					break;
 				case MOVE_RIGHT:
-					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
 					break;
 				case ZOOM_IN_X:
-					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
 					break;
 				case ZOOM_OUT_X:
-					xTaskNotify(appGlobals.signalThreadId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
 					break;
 				default:
 					break;
@@ -165,7 +165,7 @@ static void scaleAxisYInt(int16_t* tab, uint32_t len) {
 		tab[index] = (tab[index]-min)*GRAPH_RANGE_Y/(max-min)+GRAPH_OFFSET_Y;
 }
 
-void Signal_Thread(void const *arg) {
+void Signal_Task(void const *arg) {
 
 	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -232,7 +232,7 @@ void Signal_Thread(void const *arg) {
 	 }
 }
 
-void FFT_Thread(void const *arg) {
+void FFT_Task(void const *arg) {
 
 	arm_rfft_fast_instance_f32 fftInit;
 	arm_rfft_fast_init_f32(&fftInit, SIGNAL_SAMPLES);
@@ -401,15 +401,15 @@ void vApplicationTickHook( void )
 
 void BSP_AUDIO_IN_HalfTransfer_CallBack(void) {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
-	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xTaskNotifyFromISR(appGlobals.fftThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
-	xTaskNotifyFromISR(appGlobals.signalThreadId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
