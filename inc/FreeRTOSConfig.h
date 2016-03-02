@@ -104,7 +104,7 @@
 #define configUSE_RECURSIVE_MUTEXES		1
 #define configUSE_MALLOC_FAILED_HOOK	        0
 #define configUSE_APPLICATION_TASK_TAG	        0
-#define configUSE_COUNTING_SEMAPHORES	        1
+#define configUSE_COUNTING_SEMAPHORES	        0
 #define configGENERATE_RUN_TIME_STATS	        0
 
 #define configENABLE_BACKWARD_COMPATIBILITY 0
