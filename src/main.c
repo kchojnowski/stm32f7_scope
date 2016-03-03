@@ -30,7 +30,7 @@
 static void GUI_Task(void const *argument);
 static void Signal_Task(void const *argument);
 static void FFT_Task(void const *argument);
-static void vTouchTimerCallback(TimerHandle_t pxTimer);
+static void TouchPanel_TimerCallback(TimerHandle_t pxTimer);
 static void SystemClock_Config(void);
 
 static AppGlobals_s appGlobals;
@@ -46,10 +46,10 @@ int main(void)
   HAL_Init();
   SystemClock_Config();
 
-  xTaskCreate(GUI_Task, "GUI_Task", 512, NULL, 1, &appGlobals.guiTaskId);
-  xTaskCreate(Signal_Task, "Signal_Task", 1024, NULL, 1, &appGlobals.signalTaskId);
-  xTaskCreate(FFT_Task, "FFT_Task", 1024, NULL, 1, &appGlobals.fftTaskId);
-  appGlobals.touchScreenTimer = xTimerCreate ("Timer", 100, pdTRUE, ( void * ) 1, vTouchTimerCallback );
+  xTaskCreate((TaskFunction_t)GUI_Task, "GUI_Task", 1024, NULL, 1, &appGlobals.guiTaskId);
+  xTaskCreate((TaskFunction_t)Signal_Task, "Signal_Task", 1024, NULL, 1, &appGlobals.signalTaskId);
+  xTaskCreate((TaskFunction_t)FFT_Task, "FFT_Task", 1024, NULL, 1, &appGlobals.fftTaskId);
+  appGlobals.touchPanelTimer = xTimerCreate ("Timer", pdMS_TO_TICKS(100), pdTRUE, &appGlobals.touchPanelTimerId, TouchPanel_TimerCallback );
   appGlobals.gestureQueue = xQueueCreate(1, sizeof(MTOUCH_GestureData_s));
 
   vTaskStartScheduler();
@@ -61,7 +61,7 @@ void GUI_Task(void const *arg) {
 
 	BSP_SDRAM_Init();
 	BSP_TS_Init(LCD_GetXSize(), LCD_GetYSize());
-	xTimerStart(appGlobals.touchScreenTimer, 0);
+	xTimerStart(appGlobals.touchPanelTimer, 0);
 
 	__HAL_RCC_CRC_CLK_ENABLE();
 	WM_SetCreateFlags(WM_CF_MEMDEV | WM_CF_MEMDEV_ON_REDRAW);
@@ -93,16 +93,16 @@ void GUI_Task(void const *arg) {
 			if (gestureData.origin_y > LCD_GetYSize() / 2) {
 				switch (gestureData.gesture) {
 				case MOVE_LEFT:
-					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetBits);
 					break;
 				case MOVE_RIGHT:
-					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetBits);
 					break;
 				case ZOOM_IN_X:
-					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetBits);
 					break;
 				case ZOOM_OUT_X:
-					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.fftTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetBits);
 					break;
 				default:
 					break;
@@ -110,16 +110,16 @@ void GUI_Task(void const *arg) {
 			} else {
 				switch (gestureData.gesture) {
 				case MOVE_LEFT:
-					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_LEFT, eSetBits);
 					break;
 				case MOVE_RIGHT:
-					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT, eSetBits);
 					break;
 				case ZOOM_IN_X:
-					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X, eSetBits);
 					break;
 				case ZOOM_OUT_X:
-					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetValueWithOverwrite);
+					xTaskNotify(appGlobals.signalTaskId, TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X, eSetBits);
 					break;
 				default:
 					break;
@@ -179,8 +179,7 @@ void Signal_Task(void const *arg) {
 	uint16_t idx;
 	for (;;) {
 		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
-			switch (notificationValue) {
-			case TASK_EVENT_DMA_HALF_DONE:
+			if(notificationValue & TASK_EVENT_DMA_HALF_DONE) {
 				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
 					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[idx*2];
 
@@ -194,9 +193,8 @@ void Signal_Task(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
 				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH, appGlobals.signalDisplay, SIGNAL_LENGTH);
 				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
-				break;
 
-			case TASK_EVENT_DMA_DONE:
+			} if(notificationValue & TASK_EVENT_DMA_DONE) {
 				for (idx = 0; idx < SIGNAL_SAMPLES; idx++)
 					appGlobals.signalDisplay[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2 + idx*2];
 
@@ -210,23 +208,22 @@ void Signal_Task(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.signalGraphData);
 				appGlobals.signalGraphData = GRAPH_DATA_YT_Create(GUI_RED, SIGNAL_LENGTH,  appGlobals.signalDisplay, SIGNAL_LENGTH);
 				GRAPH_AttachData(appGlobals.signalGraph, appGlobals.signalGraphData);
-				break;
-			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_MOVE_LEFT) {
 				if((SIGNAL_LENGTH-1+displayOffsetX+5)*(displayScaleX)<SIGNAL_SAMPLES)
 					displayOffsetX+= 5;
-				break;
-			case TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT) {
 				if(displayOffsetX >= 5)
 					displayOffsetX-=5;
-				break;
-			case TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X) {
 				if(displayScaleX>1)
 					displayScaleX--;
-				break;
-			case TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X) {
 				if((FFT_LENGTH-1+displayOffsetX)*(displayScaleX+1)<SIGNAL_SAMPLES)
 					displayScaleX++;
-				break;
 			}
 		}
 	 }
@@ -246,8 +243,7 @@ void FFT_Task(void const *arg) {
 	for (;;) {
 
 		if (xTaskNotifyWait(0, UINT32_MAX, &notificationValue, portMAX_DELAY)) {
-			switch (notificationValue) {
-			case TASK_EVENT_DMA_HALF_DONE:
+			if(notificationValue & TASK_EVENT_DMA_HALF_DONE) {
 				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
 					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[idx*2];
 				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
@@ -263,8 +259,8 @@ void FFT_Task(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
 				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
 				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
-				break;
-			case TASK_EVENT_DMA_DONE:
+
+			} if(notificationValue & TASK_EVENT_DMA_DONE) {
 				for(idx=0; idx<SIGNAL_SAMPLES; idx++)
 					appGlobals.fftInput[idx] = appGlobals.dmaBuffer[DMA_BUFFER_LENGTH/2+idx*2];
 				arm_rfft_fast_f32(&fftInit, appGlobals.fftInput, appGlobals.fftOutput, 0);
@@ -280,20 +276,20 @@ void FFT_Task(void const *arg) {
 				GRAPH_DATA_YT_Delete(appGlobals.fftGraphData);
 				appGlobals.fftGraphData = GRAPH_DATA_YT_Create(GUI_BLUE, FFT_LENGTH, appGlobals.fftDisplay, FFT_LENGTH);
 				GRAPH_AttachData(appGlobals.fftGraph, appGlobals.fftGraphData);
-				break;
-			case TASK_EVENT_CHANGE_VIEW_MOVE_LEFT:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_MOVE_LEFT) {
 				 if(displayOffsetX + displayScaleX*(FFT_LENGTH+10)<SIGNAL_SAMPLES) {
 					displayOffsetX+= 10*displayScaleX;
 					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
 				}
-				break;
-			case TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_MOVE_RIGHT) {
 				if(displayOffsetX >= 10*displayScaleX) {
 					displayOffsetX-=10*displayScaleX;
 					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
 				}
-				break;
-			case TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_ZOOM_IN_X) {
 				if(displayScaleX>1) {
 					displayOffsetX*=scaleFactor;
 					displayOffsetX += FFT_LENGTH*displayScaleX/4;
@@ -303,8 +299,8 @@ void FFT_Task(void const *arg) {
 					GRAPH_SCALE_SetFactor(appGlobals.fftGraphScale,  scaleFactor*displayScaleX);
 					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
 				}
-				break;
-			case TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X:
+
+			} if(notificationValue & TASK_EVENT_CHANGE_VIEW_ZOOM_OUT_X) {
 				if((FFT_LENGTH-1)*(displayScaleX+1)<SIGNAL_SAMPLES) {
 					displayOffsetX *= scaleFactor;
 					displayOffsetX -= FFT_LENGTH * displayScaleX / 2;
@@ -318,7 +314,6 @@ void FFT_Task(void const *arg) {
 					GRAPH_SCALE_SetFactor(appGlobals.fftGraphScale,  scaleFactor*displayScaleX);
 					GRAPH_SCALE_SetOff(appGlobals.fftGraphScale, -1*displayOffsetX/displayScaleX);
 				}
-				break;
 			}
 		}
 	 }
@@ -401,19 +396,19 @@ void vApplicationTickHook( void )
 
 void BSP_AUDIO_IN_HalfTransfer_CallBack(void) {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
-	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_HALF_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_HALF_DONE, eSetBits, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_HALF_DONE, eSetBits, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void BSP_AUDIO_IN_TransferComplete_CallBack(void) {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
-	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_DONE, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.fftTaskId, TASK_EVENT_DMA_DONE, eSetBits, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(appGlobals.signalTaskId, TASK_EVENT_DMA_DONE, eSetBits, &xHigherPriorityTaskWoken);
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-static void vTouchTimerCallback(TimerHandle_t pxTimer) {
+static void TouchPanel_TimerCallback(TimerHandle_t pxTimer) {
 
 	TS_StateTypeDef tsState;
 	MTOUCH_TouchData_s touchData;
@@ -433,4 +428,3 @@ static void vTouchTimerCallback(TimerHandle_t pxTimer) {
 	xQueueOverwrite(appGlobals.gestureQueue, &gestureData);
 }
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
-
