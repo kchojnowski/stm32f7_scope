@@ -83,9 +83,9 @@
 									<listOptionValue builtIn="false" srcPrefixMapping="" srcRootPath="" value=":STemWin532_CM7_OS_GCC.a"/>
 									<listOptionValue builtIn="false" srcPrefixMapping="" srcRootPath="" value="arm_cortexM7lfsp_math"/>
 								</option>
-								<option id="gnu.c.link.option.paths.1759682036" name="Library search path (-L)" superClass="gnu.c.link.option.paths" valueType="libPaths">
+								<option id="gnu.c.link.option.paths.1759682036" name="Library search path (-L)" superClass="gnu.c.link.option.paths" useByScannerDiscovery="false" valueType="libPaths">
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/stm32f7_scope/Middlewares/ST/STemWin/Lib}&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/stm32f7_scope/Middlewares/math}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/stm32f7_scope/CMSIS/Lib}&quot;"/>
 								</option>
 								<inputType id="cdt.managedbuild.tool.gnu.c.linker.input.1250868954" superClass="cdt.managedbuild.tool.gnu.c.linker.input">
 									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>
@@ -306,4 +306,5 @@
 	<storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
 	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 	<storageModule moduleId="refreshScope"/>
+	<storageModule moduleId="org.eclipse.cdt.internal.ui.text.commentOwnerProjectMappings"/>
 </cproject>
